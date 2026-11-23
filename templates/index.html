@@ -35,15 +35,15 @@
     <section class="current-card" aria-labelledby="current-title">
       <div class="current-main">
         <div>
-          <p class="card-kicker" id="current-title">最新時段預報 <span class="live-dot"></span></p>
+          <p class="card-kicker" id="current-title">現在天氣 <span class="live-dot"></span></p>
           <p class="condition">{{ weather.current.description }}</p>
-          <p class="feels">體感 {{ weather.current.feels_like if weather.current.feels_like is not none else '—' }}°{% if weather.updated %} · {{ weather.updated[11:16] }} 起{% endif %}</p>
+          <p class="feels">體感 {{ weather.current.feels_like if weather.current.feels_like is not none else '—' }}°</p>
         </div>
         <div class="temperature">{{ weather.current.temperature if weather.current.temperature is not none else '—' }}<span>°</span></div>
       </div>
       <div class="current-details">
         <div class="detail"><span class="detail-icon">◉</span><span><small>相對濕度</small><strong>{{ weather.current.humidity if weather.current.humidity is not none else '—' }}{% if weather.current.humidity is not none %}%{% endif %}</strong></span></div>
-        <div class="detail"><span class="detail-icon">↗</span><span><small>風速</small><strong>{{ weather.current.wind if weather.current.wind is not none else '—' }}{% if weather.current.wind is not none %} m/s{% endif %}</strong></span></div>
+        <div class="detail"><span class="detail-icon">↗</span><span><small>風速</small><strong>{{ weather.current.wind if weather.current.wind is not none else '—' }}{% if weather.current.wind is not none %} km/h{% endif %}</strong></span></div>
         <div class="detail"><span class="detail-icon">⌁</span><span><small>天氣狀況</small><strong>{{ weather.current.description }}</strong></span></div>
       </div>
     </section>
@@ -54,7 +54,7 @@
         {% for day in weather.forecast %}
         <article class="forecast-card {% if loop.first %}today{% endif %}">
           <p class="forecast-date">{% if loop.first %}今天{% else %}週{{ day.weekday }}{% endif %}<span>{{ day.date }}</span></p>
-          <span class="weather-symbol" aria-hidden="true">{{ day.symbol }}</span>
+          <span class="weather-symbol" aria-hidden="true">{% if day.code in [0, 1] %}☀{% elif day.code == 2 %}⛅{% elif day.code in [3, 45, 48] %}☁{% elif day.code >= 95 %}ϟ{% elif day.code in [71, 73, 75, 77, 85, 86] %}❄{% else %}☂{% endif %}</span>
           <p class="forecast-description">{{ day.description }}</p>
           <p class="temps"><strong>{{ day.high if day.high is not none else '—' }}°</strong><span>{{ day.low if day.low is not none else '—' }}°</span></p>
           <p class="rain">☂ 降雨 {{ day.rain if day.rain is not none else '—' }}{% if day.rain is not none %}%{% endif %}</p>
@@ -64,7 +64,7 @@
     </section>
     {% endif %}
 
-    <footer><span>資料來源 <a href="https://opendata.cwa.gov.tw/dataset/forecast/F-D0047-015" target="_blank" rel="noopener noreferrer">中央氣象署開放資料</a></span><span>天氣資料僅供參考</span></footer>
+    <footer><span>資料來源 <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a></span><span>天氣資料僅供參考</span></footer>
   </main>
 </body>
 </html>
