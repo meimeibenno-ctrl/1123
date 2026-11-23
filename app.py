@@ -1,53 +1,56 @@
-"""Miaoli County weather app powered by Open-Meteo."""
+"""Miaoli County weather app powered by Taiwan's CWA Open Data API."""
 
 from __future__ import annotations
 
+import os
 import threading
 import time
-from datetime import date
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 from flask import Flask, render_template, request
 
 app = Flask(__name__)
 
-API_URL = "https://api.open-meteo.com/v1/forecast"
+CWA_API_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-015"
 CACHE_TTL_SECONDS = 10 * 60
 REQUEST_TIMEOUT_SECONDS = 8
+TAIPEI = ZoneInfo("Asia/Taipei")
 
-# Coordinates are representative points in each township/city.
-TOWNS: dict[str, dict[str, float | str]] = {
-    "miaoli": {"name": "苗栗市", "latitude": 24.5602, "longitude": 120.8214},
-    "toufen": {"name": "頭份市", "latitude": 24.6847, "longitude": 120.9074},
-    "zhunan": {"name": "竹南鎮", "latitude": 24.6850, "longitude": 120.8788},
-    "houlong": {"name": "後龍鎮", "latitude": 24.6126, "longitude": 120.7867},
-    "tongxiao": {"name": "通霄鎮", "latitude": 24.4891, "longitude": 120.6780},
-    "yuanli": {"name": "苑裡鎮", "latitude": 24.4417, "longitude": 120.6519},
-    "zhuolan": {"name": "卓蘭鎮", "latitude": 24.3094, "longitude": 120.8245},
-    "zaoqiao": {"name": "造橋鄉", "latitude": 24.6372, "longitude": 120.8628},
-    "xihu": {"name": "西湖鄉", "latitude": 24.5568, "longitude": 120.7591},
-    "touya": {"name": "頭屋鄉", "latitude": 24.5736, "longitude": 120.8468},
-    "gongguan": {"name": "公館鄉", "latitude": 24.5000, "longitude": 120.8223},
-    "tongluo": {"name": "銅鑼鄉", "latitude": 24.4869, "longitude": 120.7866},
-    "sanyi": {"name": "三義鄉", "latitude": 24.3503, "longitude": 120.7670},
-    "dahu": {"name": "大湖鄉", "latitude": 24.4224, "longitude": 120.8635},
-    "shitan": {"name": "獅潭鄉", "latitude": 24.5393, "longitude": 120.9217},
-    "sanwan": {"name": "三灣鄉", "latitude": 24.6522, "longitude": 120.9516},
-    "nanzhuang": {"name": "南庄鄉", "latitude": 24.5962, "longitude": 120.9997},
-    "taian": {"name": "泰安鄉", "latitude": 24.4422, "longitude": 120.9043},
+# CWA forecast location names are the same as the township/city names below.
+TOWNS: dict[str, dict[str, str]] = {
+    "miaoli": {"name": "苗栗市"},
+    "toufen": {"name": "頭份市"},
+    "zhunan": {"name": "竹南鎮"},
+    "houlong": {"name": "後龍鎮"},
+    "tongxiao": {"name": "通霄鎮"},
+    "yuanli": {"name": "苑裡鎮"},
+    "zhuolan": {"name": "卓蘭鎮"},
+    "zaoqiao": {"name": "造橋鄉"},
+    "xihu": {"name": "西湖鄉"},
+    "touya": {"name": "頭屋鄉"},
+    "gongguan": {"name": "公館鄉"},
+    "tongluo": {"name": "銅鑼鄉"},
+    "sanyi": {"name": "三義鄉"},
+    "dahu": {"name": "大湖鄉"},
+    "shitan": {"name": "獅潭鄉"},
+    "sanwan": {"name": "三灣鄉"},
+    "nanzhuang": {"name": "南庄鄉"},
+    "taian": {"name": "泰安鄉"},
 }
 
-WEATHER_CODES = {
-    0: "晴朗", 1: "大致晴朗", 2: "局部多雲", 3: "陰天",
-    45: "有霧", 48: "霧凇",
-    51: "毛毛雨", 53: "中度毛毛雨", 55: "濃毛毛雨",
-    56: "凍毛毛雨", 57: "濃凍毛毛雨",
-    61: "小雨", 63: "中雨", 65: "大雨", 66: "凍雨", 67: "強凍雨",
-    71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
-    80: "短暫陣雨", 81: "中度陣雨", 82: "強陣雨",
-    85: "短暫陣雪", 86: "強陣雪",
-    95: "雷雨", 96: "雷雨伴隨冰雹", 99: "強雷雨伴隨冰雹",
+# Keep names flexible in case the CWA API changes its display language.
+ELEMENT_NAMES = {
+    "weather": ("天氣現象", "Wx", "Weather"),
+    "temperature": ("溫度", "T", "Temperature"),
+    "feels_like": ("體感溫度", "AT", "ApparentTemperature"),
+    "humidity": ("相對濕度", "RH", "RelativeHumidity"),
+    "wind": ("風速", "WindSpeed"),
+    "rain": ("12小時降雨機率", "降雨機率", "PoP", "ProbabilityOfPrecipitation"),
+    "high": ("最高溫度", "MaxT", "MaxTemperature"),
+    "low": ("最低溫度", "MinT", "MinTemperature"),
 }
 
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -55,72 +58,187 @@ _cache_lock = threading.Lock()
 
 
 class WeatherDataError(Exception):
-    """Raised when Open-Meteo data cannot be fetched or interpreted."""
+    """Raised when CWA data cannot be fetched or interpreted."""
 
 
-def weather_description(code: int) -> str:
-    return WEATHER_CODES.get(code, "天氣狀況未知")
+def _parse_number(value: Any) -> float | None:
+    if value is None or value in ("", "-", "--", "無資料"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def _number(value: Any) -> float | int | None:
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+def _display_number(value: float | None) -> int | float | None:
+    if value is None:
+        return None
+    return int(value) if value.is_integer() else value
+
+
+def _weather_symbol(description: str) -> str:
+    if "雷" in description:
+        return "ϟ"
+    if "雪" in description:
+        return "❄"
+    if any(word in description for word in ("雨", "陣雨", "毛毛雨")):
+        return "☂"
+    if "晴" in description:
+        return "☀" if "多雲" not in description else "⛅"
+    if "雲" in description:
+        return "⛅" if "晴" in description else "☁"
+    if "霧" in description:
+        return "☁"
+    return "☼"
+
+
+def _weather_elements(location: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    found: dict[str, list[dict[str, Any]]] = {}
+    for item in location.get("weatherElement", []):
+        name = item.get("elementName")
+        for key, aliases in ELEMENT_NAMES.items():
+            if name in aliases:
+                found[key] = item.get("time", [])
+                break
+    return found
+
+
+def _period_value(periods: list[dict[str, Any]], now: datetime) -> tuple[float | None, str | None, datetime | None]:
+    parsed: list[tuple[datetime, datetime, float | None, str | None]] = []
+    for period in periods:
+        try:
+            start = datetime.fromisoformat(period["startTime"])
+            end = datetime.fromisoformat(period["endTime"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        values = period.get("elementValue", [])
+        raw = values[0].get("value") if values and isinstance(values[0], dict) else None
+        parsed.append((start, end, _parse_number(raw), str(raw) if raw not in (None, "-") else None))
+    if not parsed:
+        return None, None, None
+    active = next((item for item in parsed if item[0] <= now < item[1]), None)
+    if active is None:
+        active = next((item for item in parsed if item[0] >= now), parsed[0])
+    return active[2], active[3], active[0]
+
+
+def _forecast_days(elements: dict[str, list[dict[str, Any]]], now: datetime) -> list[dict[str, Any]]:
+    # The 7-day CWA product is published in 12-hour intervals. Group those
+    # intervals by their start date to show an easy-to-read daily summary.
+    by_date: dict[str, list[datetime]] = {}
+    for period in elements.get("high", []) + elements.get("weather", []):
+        try:
+            start = datetime.fromisoformat(period["startTime"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start.date() >= now.date():
+            by_date.setdefault(start.date().isoformat(), []).append(start)
+    dates = sorted(by_date)[:5]
+
+    def daily_values(key: str, day: str) -> list[float]:
+        values = []
+        for period in elements.get(key, []):
+            try:
+                period_day = datetime.fromisoformat(period["startTime"]).date().isoformat()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if period_day == day:
+                raw_values = period.get("elementValue", [])
+                value = _parse_number(raw_values[0].get("value")) if raw_values else None
+                if value is not None:
+                    values.append(value)
+        return values
+
+    result = []
+    for day in dates:
+        description = "天氣資料待更新"
+        # Prefer the daytime description; use the first available interval otherwise.
+        weather_periods = elements.get("weather", [])
+        day_periods = []
+        for period in weather_periods:
+            try:
+                start = datetime.fromisoformat(period["startTime"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start.date().isoformat() == day:
+                values = period.get("elementValue", [])
+                value = str(values[0].get("value", "")) if values else ""
+                day_periods.append((start, value))
+        if day_periods:
+            daytime = next((item for item in day_periods if 6 <= item[0].hour < 18), day_periods[0])
+            description = daytime[1] or description
+
+        highs = daily_values("high", day)
+        lows = daily_values("low", day)
+        rains = daily_values("rain", day)
+        date_value = datetime.fromisoformat(day).date()
+        result.append({
+            "date": date_value.strftime("%m/%d"),
+            "weekday": ("一", "二", "三", "四", "五", "六", "日")[date_value.weekday()],
+            "description": description,
+            "symbol": _weather_symbol(description),
+            "high": _display_number(max(highs)) if highs else None,
+            "low": _display_number(min(lows)) if lows else None,
+            "rain": _display_number(max(rains)) if rains else None,
+        })
+    if len(result) < 5:
+        raise ValueError("CWA response does not include five forecast days")
+    return result
 
 
 def _fetch_weather(town_id: str) -> dict[str, Any]:
-    now = time.monotonic()
+    now_monotonic = time.monotonic()
     with _cache_lock:
         cached = _cache.get(town_id)
-        if cached and now - cached[0] < CACHE_TTL_SECONDS:
+        if cached and now_monotonic - cached[0] < CACHE_TTL_SECONDS:
             return cached[1]
 
-    town = TOWNS[town_id]
+    api_key = os.getenv("CWA_API_KEY", "").strip()
+    if not api_key:
+        raise WeatherDataError("請先設定中央氣象署 API 授權碼（環境變數 CWA_API_KEY），即可查詢天氣資料。")
+
+    now = datetime.now(TAIPEI)
     params = {
-        "latitude": town["latitude"],
-        "longitude": town["longitude"],
-        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code",
-        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-        "forecast_days": 5,
-        "timezone": "Asia/Taipei",
+        "Authorization": api_key,
+        "format": "JSON",
+        "LocationName": TOWNS[town_id]["name"],
+        "ElementName": ",".join(name for aliases in ELEMENT_NAMES.values() for name in aliases[:1]),
     }
     try:
-        response = requests.get(API_URL, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+        response = requests.get(CWA_API_URL, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
         payload = response.json()
-        current = payload["current"]
-        daily = payload["daily"]
-        required_current = ("temperature_2m", "apparent_temperature", "relative_humidity_2m", "wind_speed_10m", "weather_code")
-        required_daily = ("time", "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_probability_max")
-        if any(key not in current for key in required_current) or any(key not in daily for key in required_daily):
-            raise ValueError("API response is missing required fields")
+        locations = payload.get("records", {}).get("locations", [])
+        location = next(
+            item for group in locations for item in group.get("location", [])
+            if item.get("locationName") == TOWNS[town_id]["name"]
+        )
+        elements = _weather_elements(location)
+        if "weather" not in elements or "high" not in elements or "low" not in elements:
+            raise ValueError("CWA response is missing forecast elements")
 
-        forecast = []
-        for index, day in enumerate(daily["time"][:5]):
-            forecast.append({
-                "date": date.fromisoformat(day).strftime("%m/%d"),
-                "weekday": ("一", "二", "三", "四", "五", "六", "日")[date.fromisoformat(day).weekday()],
-                "code": daily["weather_code"][index],
-                "description": weather_description(int(daily["weather_code"][index])),
-                "high": _number(daily["temperature_2m_max"][index]),
-                "low": _number(daily["temperature_2m_min"][index]),
-                "rain": _number(daily["precipitation_probability_max"][index]),
-            })
-        if len(forecast) != 5:
-            raise ValueError("API response does not include five forecast days")
-
+        temperature, _, current_start = _period_value(elements.get("temperature", []), now)
+        feels_like, _, _ = _period_value(elements.get("feels_like", []), now)
+        humidity, _, _ = _period_value(elements.get("humidity", []), now)
+        wind, _, _ = _period_value(elements.get("wind", []), now)
+        _, description, _ = _period_value(elements.get("weather", []), now)
+        if not description:
+            description = "天氣資料待更新"
         result = {
             "current": {
-                "temperature": _number(current["temperature_2m"]),
-                "feels_like": _number(current["apparent_temperature"]),
-                "humidity": _number(current["relative_humidity_2m"]),
-                "wind": _number(current["wind_speed_10m"]),
-                "code": int(current["weather_code"]),
-                "description": weather_description(int(current["weather_code"])),
+                "temperature": _display_number(temperature),
+                "feels_like": _display_number(feels_like),
+                "humidity": _display_number(humidity),
+                "wind": _display_number(wind),
+                "description": description,
+                "symbol": _weather_symbol(description),
             },
-            "forecast": forecast,
-            "updated": current.get("time"),
+            "forecast": _forecast_days(elements, now),
+            "updated": current_start.isoformat(timespec="minutes") if current_start else None,
+            "source_note": "中央氣象署鄉鎮預報",
         }
-    except (requests.RequestException, ValueError, TypeError, KeyError, IndexError) as exc:
-        raise WeatherDataError("目前無法取得最新天氣資料，請稍後再試。") from exc
+    except (requests.RequestException, ValueError, TypeError, KeyError, StopIteration, IndexError) as exc:
+        raise WeatherDataError("目前無法取得中央氣象署天氣資料，請檢查授權碼或稍後再試。") from exc
 
     with _cache_lock:
         _cache[town_id] = (time.monotonic(), result)
