@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f2e9">
+  <title>{{ town.name }}天氣｜苗栗縣天氣小站</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="苗栗縣天氣小站首頁"><span class="brand-mark">☼</span><span>苗栗縣天氣小站</span></a>
+      <span class="region-label">TAIWAN · MIAOLI</span>
+    </header>
+
+    <section class="intro" aria-labelledby="page-title">
+      <p class="eyebrow">LOCAL WEATHER · 苗栗縣</p>
+      <h1 id="page-title">今天，{{ town.name }}的天氣</h1>
+      <p class="intro-copy">出門前看看天氣，從容安排今天的行程。</p>
+      <form class="town-picker" method="get" action="/">
+        <label for="town">選擇鄉鎮市</label>
+        <select id="town" name="town" onchange="this.form.submit()">
+          {% for key, item in towns.items() %}
+          <option value="{{ key }}" {% if key == town_id %}selected{% endif %}>{{ item.name }}</option>
+          {% endfor %}
+        </select>
+        <noscript><button type="submit">查詢</button></noscript>
+      </form>
+    </section>
+
+    {% if error %}
+    <section class="notice" role="status"><span class="notice-icon">☁</span><div><strong>天氣資料暫時無法載入</strong><p>{{ error }}您可以稍後重新整理頁面。</p></div></section>
+    {% elif weather %}
+    <section class="current-card" aria-labelledby="current-title">
+      <div class="current-main">
+        <div>
+          <p class="card-kicker" id="current-title">現在天氣 <span class="live-dot"></span></p>
+          <p class="condition">{{ weather.current.description }}</p>
+          <p class="feels">體感 {{ weather.current.feels_like if weather.current.feels_like is not none else '—' }}°</p>
+        </div>
+        <div class="temperature">{{ weather.current.temperature if weather.current.temperature is not none else '—' }}<span>°</span></div>
+      </div>
+      <div class="current-details">
+        <div class="detail"><span class="detail-icon">◉</span><span><small>相對濕度</small><strong>{{ weather.current.humidity if weather.current.humidity is not none else '—' }}{% if weather.current.humidity is not none %}%{% endif %}</strong></span></div>
+        <div class="detail"><span class="detail-icon">↗</span><span><small>風速</small><strong>{{ weather.current.wind if weather.current.wind is not none else '—' }}{% if weather.current.wind is not none %} km/h{% endif %}</strong></span></div>
+        <div class="detail"><span class="detail-icon">⌁</span><span><small>天氣狀況</small><strong>{{ weather.current.description }}</strong></span></div>
+      </div>
+    </section>
+
+    <section class="forecast-section" aria-labelledby="forecast-title">
+      <div class="section-heading"><div><p class="eyebrow">UP NEXT</p><h2 id="forecast-title">未來 5 日</h2></div><span class="unit-note">每日最高 / 最低溫</span></div>
+      <div class="forecast-grid">
+        {% for day in weather.forecast %}
+        <article class="forecast-card {% if loop.first %}today{% endif %}">
+          <p class="forecast-date">{% if loop.first %}今天{% else %}週{{ day.weekday }}{% endif %}<span>{{ day.date }}</span></p>
+          <span class="weather-symbol" aria-hidden="true">{% if day.code in [0, 1] %}☀{% elif day.code == 2 %}⛅{% elif day.code in [3, 45, 48] %}☁{% elif day.code >= 95 %}ϟ{% elif day.code in [71, 73, 75, 77, 85, 86] %}❄{% else %}☂{% endif %}</span>
+          <p class="forecast-description">{{ day.description }}</p>
+          <p class="temps"><strong>{{ day.high if day.high is not none else '—' }}°</strong><span>{{ day.low if day.low is not none else '—' }}°</span></p>
+          <p class="rain">☂ 降雨 {{ day.rain if day.rain is not none else '—' }}{% if day.rain is not none %}%{% endif %}</p>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <footer><span>資料來源 <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a></span><span>天氣資料僅供參考</span></footer>
+  </main>
+</body>
+</html>
